@@ -6,7 +6,7 @@ import CoreBluetooth
 // Set to `true` to run with fake data in the simulator.
 // Set to `false` when running on a real device with the exoskeleton.
 // ─────────────────────────────────────────────
-let MOCK_MODE = true
+let MOCK_MODE = false
 
 // MARK: - Discovered Device (real or mock)
 struct DiscoveredDevice: Identifiable {
@@ -51,6 +51,8 @@ class BLEManager: NSObject, ObservableObject {
 
     // MARK: RT Data
     @Published var rtData: [Double] = Array(repeating: 0, count: 16)
+    @Published var rtPacketCount: Int = 0       // increments each received frame
+    @Published var lastRawPacket: String = ""   // for debugging
 
     // MARK: Chart Snapshots (20fps)
     @Published var chartSnapshot: [[Double]] = Array(repeating: Array(repeating: 0, count: 300), count: 8)
@@ -274,6 +276,7 @@ class BLEManager: NSObject, ObservableObject {
         var updated = rtData
         for (i, v) in values.prefix(16).enumerated() { updated[i] = v }
         rtData = updated
+        rtPacketCount += 1
         if values.count > 10 { batteryVoltage = values[10] }
         let idx = writeIdx % chartCapacity
         for (i, v) in values.prefix(8).enumerated() { circularBuf[i][idx] = v }
@@ -283,16 +286,32 @@ class BLEManager: NSObject, ObservableObject {
     // ─────────────────────────────────────────────
     // MARK: - Real BLE: RT Data Parsing
     // ─────────────────────────────────────────────
-    private func parseRTData(_ str: String) {
-        guard let sRange = str.range(of: "S") else { return }
-        let after = String(str[sRange.upperBound...])
-        let parts = after.components(separatedBy: "n").compactMap { part -> Double? in
+    private func extractNumbers(from str: String) -> [Double] {
+        // Split on "n" and parse each chunk as an integer / 100
+        return str.components(separatedBy: "n").compactMap { part -> Double? in
             let digits = part.filter { $0.isNumber || $0 == "-" }
-            guard let intVal = Int(digits) else { return nil }
+            guard !digits.isEmpty, digits != "-",
+                  let intVal = Int(digits) else { return nil }
             return Double(intVal) / 100.0
         }
-        guard !parts.isEmpty else { return }
-        ingestSample(parts)
+    }
+
+    private func parseRTData(_ str: String) {
+        lastRawPacket = str   // store for debug display
+        var values: [Double] = []
+
+        // Try standard format: …c S<cmd><val>n<val>n…
+        if let sRange = str.range(of: "S") {
+            values = extractNumbers(from: String(str[sRange.upperBound...]))
+        }
+
+        // Fallback: parse the whole string for any n-separated numbers
+        if values.isEmpty {
+            values = extractNumbers(from: str)
+        }
+
+        guard values.count >= 2 else { return }
+        ingestSample(values)
     }
 
     private func parseHandshake(_ text: String) {
@@ -524,6 +543,7 @@ extension BLEManager: CBPeripheralDelegate {
             }
             return
         }
-        if str.contains("c S") { parseRTData(str) }
+        // Try RT data if it looks like a data frame (has "n" separators and "c" count prefix)
+        if str.contains("n") && !str.hasPrefix("t,") { parseRTData(str) }
     }
 }

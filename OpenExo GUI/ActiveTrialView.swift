@@ -69,6 +69,8 @@ struct ActiveTrialView: View {
         HStack {
             batteryView
             Spacer()
+            dataStatusBadge
+            Spacer()
             pausePlayButton
             Spacer()
             Button(action: { showEndAlert = true }) {
@@ -83,6 +85,19 @@ struct ActiveTrialView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(Color(.systemGray6).opacity(0.15))
+    }
+
+    // Shows packet count so you can confirm data is flowing
+    private var dataStatusBadge: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(ble.rtPacketCount > 0 ? Color.green : Color.orange)
+                .frame(width: 7, height: 7)
+                .shadow(color: ble.rtPacketCount > 0 ? .green : .orange, radius: 3)
+            Text(ble.rtPacketCount > 0 ? "\(ble.rtPacketCount) pkts" : "No data")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.gray)
+        }
     }
 
     // MARK: - Controls Panel
@@ -347,8 +362,13 @@ struct RealTimeChart: View {
     let label2: String
     let title: String
 
-    private var yRange: (lo: Double, hi: Double) {
+    private var hasData: Bool {
         let all = series1 + series2
+        return all.contains { abs($0) > 0.01 }
+    }
+
+    private var yRange: (lo: Double, hi: Double) {
+        let all = (series1 + series2).filter { abs($0) > 0.001 }
         guard !all.isEmpty else { return (-1, 1) }
         let lo = all.min()!
         let hi = all.max()!
@@ -370,6 +390,12 @@ struct RealTimeChart: View {
             }
             .padding(.horizontal, 4)
 
+            ZStack {
+            if !hasData {
+                Text("Waiting for data…")
+                    .font(.caption)
+                    .foregroundStyle(.gray.opacity(0.6))
+            }
             Canvas { context, size in
                 let (yMin, yMax) = yRange
                 let ySpan = yMax - yMin
@@ -433,6 +459,7 @@ struct RealTimeChart: View {
             .background(Color(.systemGray6).opacity(0.08))
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .frame(maxHeight: .infinity)
+            } // ZStack
         }
         .frame(maxHeight: .infinity)
         .padding(10)
